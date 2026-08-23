@@ -6,5 +6,6 @@ output/*.mp4
 test_videos/*.mp4
 models/*.pt
 !models/.gitkeep
+*.pt
 
 *.egg-info/
