@@ -89,14 +89,16 @@ def draw_dashboard(
     kinematics: Optional[KinematicsResult],
 ) -> None:
     h, w = frame.shape[:2]
-    panel_w, panel_h = 260, 150
+    panel_w, panel_h = 260, 175
     overlay = frame.copy()
     cv2.rectangle(overlay, (10, 10), (10 + panel_w, 10 + panel_h), (20, 20, 20), -1)
     cv2.addWeighted(overlay, config.hud_panel_alpha, frame, 1 - config.hud_panel_alpha, 0, frame)
 
+    total_drops = sum(stats.player_errors.values())
     lines = [
         f"Round touches: {stats.current_round_touches}",
         f"Total touches: {stats.total_touches}",
+        f"Total drops: {total_drops}",
     ]
     if kinematics is not None:
         lines.append(f"Speed: {kinematics.speed_mph:.1f} mph")
