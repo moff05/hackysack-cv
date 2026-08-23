@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+
+output/*.mp4
+test_videos/*.mp4
+models/*.pt
+!models/.gitkeep
+
+*.egg-info/
