@@ -20,14 +20,25 @@ class PlayerTracker:
 
         self._model = YOLO(config.pose_model_path)
         self._confidence = config.pose_confidence
+        self._imgsz = config.pose_model_imgsz
         self._config = config
 
     def update(self, frame: np.ndarray) -> List[PlayerState]:
+        # iou=0.5 (down from Ultralytics' 0.7 default): raising imgsz to fix
+        # a real detection-recall gap (see pose_model_imgsz in config.py)
+        # introduced a rare but real side effect -- ~0.3% of frames got a
+        # spurious 4th, heavily-overlapping duplicate box for one of the 3
+        # real players, and each one cascaded into a burst of new track IDs
+        # afterward. A tighter NMS threshold suppresses those duplicates
+        # before they ever reach the tracker, without giving up the
+        # resolution increase.
         results = self._model.track(
             frame,
             persist=True,
             tracker=self._config.player_tracker_config,
             conf=self._confidence,
+            imgsz=self._imgsz,
+            iou=0.5,
             verbose=False,
         )
         if not results:

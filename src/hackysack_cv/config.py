@@ -20,6 +20,18 @@ class AppConfig:
     briefly occluding each other kept getting reborn as new track IDs
     instead of reconnecting to who they already were."""
     pose_confidence: float = 0.4
+    pose_model_imgsz: int = 1280
+    """Explicit inference resolution for the pose model. Without this,
+    Ultralytics' .track() silently defaults to 640 regardless of the source
+    video's real resolution -- the exact same bug independently found and
+    fixed in YoloSackDetector. Root-caused a real symptom this caused: a
+    player standing far from camera, partially broken up by iron fence bars
+    in the background, went completely undetected (not a tracking/ID issue
+    at all) for 9-16 second stretches on real footage -- no re-identification
+    model, however good, can recover a player the detector never saw in the
+    first place. 1280 matches the sack detector's setting for consistency,
+    not independently tuned -- revisit if small/distant players are still
+    missed after this fix."""
     sack_confidence: float = 0.35
     """Acceptance threshold for ColorThresholdSackDetector's circularity
     score only. NOT comparable to sack_model_confidence below — see

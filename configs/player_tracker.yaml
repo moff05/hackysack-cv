@@ -27,11 +27,13 @@ proximity_thresh: 0.5
 appearance_thresh: 0.8
 # Tried loosening this to 0.7 alongside a shorter (90-frame) buffer -- no
 # measurable improvement in ID stability on real footage, only added risk
-# of merging two different people onto one ID. Reverted. The real
-# bottleneck is with_reid's "auto" mode reusing the detector's own features
-# rather than a trained appearance-embedding model -- not discriminative
-# enough for 3 similar-build, similarly-dressed players. A real ReID model
-# (or accepting this as a known limitation) is the next lever, not further
-# threshold tuning.
+# of merging two different people onto one ID. Reverted.
 with_reid: True
-model: auto # uses the detector's own features -- no separate ReID model/download needed
+model: yolo26n-reid.onnx
+# A dedicated, trained appearance-embedding model (auto-downloaded by
+# ultralytics on first use), NOT "auto" -- auto just reuses the pose
+# detector's own features and was tried first: real improvement over plain
+# bytetrack, but no better than shortening/loosening the buffer or
+# threshold, i.e. it wasn't actually discriminating by appearance in any
+# meaningful way for 3 similar-build, similarly-dressed players. This is
+# the real lever.
