@@ -7,6 +7,7 @@ test_videos/*.mp4
 models/*.pt
 !models/.gitkeep
 *.pt
+*.onnx
 
 *.egg-info/
 
