@@ -50,13 +50,47 @@ from color/sky matching):
    much higher, so the acceptance threshold usually needs to come back up
    (was 0.08 after round 1's 8-example model, 0.25 after round 2's 180).
 
-## Known gap as of round 2
+## Round 3 (ground-level / non-sky sightings)
 
-Every confirmed example so far is the sack airborne against open sky —
-that's what both the original color-threshold false positives and this
-model's own predictions stay confined to, since it's all the model has
-ever been shown. Ground-level sightings (near feet/pavers, mid-juggle)
-are still completely unrepresented. The model can't bootstrap examples of
-something it's never seen, so closing this gap needs a fresh round of
-manual hunting (the round-1 approach) around ground-level moments
-specifically, not another round of `bootstrap_mine.py` alone.
+`bootstrap_mine.py` alone can't close this gap — it only surfaces what the
+current model already believes might be the sack, which after rounds 1-2
+means sky-only. Closing it needs a fresh, differently-targeted manual hunt:
+
+1. **`find_kicks.py`** — scans the full video for each sampled frame's
+   highest ankle-lift (foot height above that player's own bbox bottom,
+   normalized by their height) as a proxy for "someone's mid-kick right
+   now." Writes `work/kick_history.jsonl`. Takes ~12-15 min for the full
+   video (pose-only, no sack model involved yet).
+2. **`find_kick_peaks.py`** — turns that into ~300 distinct, deduped kick
+   events (local maxima in lift ratio) as `work/kick_peaks.json`.
+3. **`mine_ground_level.py`** — samples a spread of those events, and for
+   each pulls the frame ~8 frames *before* the peak (foot still rising,
+   ball not yet launched into open sky) rather than at the peak itself.
+   Crops tightly around whichever player's foot is highest at that moment.
+   Exports to `work/ground_level_review/`.
+4. **Look at every crop yourself** — same discipline as round 2, but
+   expect a much lower hit rate. Round 3 found 5 confirmed real sightings
+   out of 103 reviewed (~5%, vs. round 2's ~100% on model-bootstrapped
+   candidates) — this heuristic (a fixed timing offset before a kick peak)
+   is far coarser than "the model's own high-confidence prediction," so
+   more false leads are expected. Don't mistake a low hit rate here for a
+   bug; it's the tradeoff for hunting somewhere the model has zero prior
+   signal to bootstrap from. Double-check any "yes" against a tight,
+   zoomed native-resolution crop of the exact frame before trusting it —
+   thumbnail-sized contact sheets can read as a hit that isn't really
+   there (happened once this round, caught by re-checking before adding
+   it as a label).
+5. **`expand_dataset_ground_level.py`** — adds the confirmed ones (manually
+   transcribed bboxes, not auto-derived — round 3 doesn't have a model
+   that already gets these right) to `dataset/`. Also worth adding a couple
+   of confirmed-empty ground-level crops as hard negatives (same visual
+   domain: shoes, pavers, fence — genuinely no ball) rather than only
+   ever-more sky negatives.
+6. Retrain and re-verify against real footage, same as round 2.
+
+**Still open after round 3:** only 5 ground-level examples is thin for an
+entirely new visual domain — expect this to help some but not fully close
+the gap. If ground-level detection is still weak after retraining, the
+next lever is running steps 3-5 again against the ~200 kick events not
+yet sampled (mine_ground_level.py currently only samples roughly a third
+of them), not a fundamentally different approach.
