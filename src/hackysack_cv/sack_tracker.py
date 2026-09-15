@@ -25,12 +25,63 @@ import numpy as np
 
 from hackysack_cv.config import AppConfig
 from hackysack_cv.kalman import KalmanFilter2D
-from hackysack_cv.types import Point, SackState
+from hackysack_cv.types import PlayerState, Point, SackState
+
+Roi = Tuple[int, int, int, int]  # x0, y0, x1, y1 in full-frame pixel coords
+
+
+def compute_search_roi(
+    players: list[PlayerState],
+    frame_width: int,
+    frame_height: int,
+    config: AppConfig,
+) -> Optional[Roi]:
+    """Bounding region the sack detector should search, built from where the
+    players currently are rather than the whole frame.
+
+    Real footage is rarely a clean studio background — trees, fences, and
+    other green/bright clutter sitting elsewhere in the frame can outscore
+    the actual sack for a naive color-threshold detector (observed directly:
+    an early real-footage test locked onto a tree canopy well above and
+    behind the players instead of the ball). Restricting the search to a
+    margin around the player cluster — generous to the sides, deliberately
+    modest above their heads — cuts most of that out. Returns None if no
+    players are tracked this frame, in which case the caller should fall
+    back to searching the whole frame.
+    """
+    if not players:
+        return None
+
+    x1s = [p.bbox[0] for p in players]
+    y1s = [p.bbox[1] for p in players]
+    x2s = [p.bbox[2] for p in players]
+    y2s = [p.bbox[3] for p in players]
+    widths = [p.bbox[2] - p.bbox[0] for p in players]
+    heights = [p.bbox[3] - p.bbox[1] for p in players]
+    widths.sort()
+    heights.sort()
+    median_w = widths[len(widths) // 2]
+    median_h = heights[len(heights) // 2]
+
+    x0 = min(x1s) - config.sack_roi_horizontal_margin_scale * median_w
+    x1 = max(x2s) + config.sack_roi_horizontal_margin_scale * median_w
+    y0 = min(y1s) - config.sack_roi_upward_margin_scale * median_h
+    y1 = frame_height  # down to the ground — a dropped sack can be below any player's feet
+
+    return (
+        int(max(0, x0)),
+        int(max(0, y0)),
+        int(min(frame_width, x1)),
+        int(min(frame_height, y1)),
+    )
 
 
 class SackDetector(Protocol):
-    def detect(self, frame: np.ndarray, frame_idx: int) -> Optional[Tuple[float, float, float]]:
-        """Return (x, y, confidence) in pixel coordinates, or None if not found."""
+    def detect(
+        self, frame: np.ndarray, frame_idx: int, roi: Optional[Roi] = None
+    ) -> Optional[Tuple[float, float, float]]:
+        """Return (x, y, confidence) in full-frame pixel coordinates, or None
+        if not found. `roi`, when given, restricts the search region."""
         ...
 
 
@@ -43,38 +94,69 @@ class YoloSackDetector:
         self._model = YOLO(model_path)
         self._confidence = confidence
 
-    def detect(self, frame: np.ndarray, frame_idx: int) -> Optional[Tuple[float, float, float]]:
-        results = self._model.predict(frame, conf=self._confidence, verbose=False)
+    def detect(
+        self, frame: np.ndarray, frame_idx: int, roi: Optional[Roi] = None
+    ) -> Optional[Tuple[float, float, float]]:
+        search_frame = frame
+        ox, oy = 0, 0
+        if roi is not None:
+            ox, oy, rx1, ry1 = roi
+            search_frame = frame[oy:ry1, ox:rx1]
+            if search_frame.size == 0:
+                return None
+
+        results = self._model.predict(search_frame, conf=self._confidence, verbose=False)
         if not results or results[0].boxes is None or len(results[0].boxes) == 0:
             return None
         boxes = results[0].boxes
         best_idx = int(boxes.conf.argmax())
         x1, y1, x2, y2 = boxes.xyxy[best_idx].tolist()
         conf = float(boxes.conf[best_idx])
-        return (x1 + x2) / 2.0, (y1 + y2) / 2.0, conf
+        return ox + (x1 + x2) / 2.0, oy + (y1 + y2) / 2.0, conf
 
 
 class ColorThresholdSackDetector:
     """Fallback detector: finds the largest blob in an HSV color range.
 
-    Defaults target a bright orange/yellow footbag under typical outdoor
-    lighting. Tune `hsv_lower`/`hsv_upper` to match your actual sack's color.
+    Defaults tuned 2026-09-14 from a real close-up photo of Nicholas's actual
+    footbag (seafoam-green/black suede panels): sampled HSV ~(74, 69, 129) on
+    the green panels (OpenCV's 0-179 hue scale), black panels reliably near
+    V<15 but too noisy in H/S to use as a primary signal outdoors (shadows
+    and dark clothing share that same low-V range). Green is the
+    discriminative channel here specifically because the test footage's
+    playing surface is a pink/tan paver driveway, not grass — on a grass
+    surface this same hue range would need a much tighter mask or a
+    trained-model detector instead, since the ground itself would false-positive.
     """
 
     def __init__(
         self,
-        hsv_lower: Tuple[int, int, int] = (5, 120, 150),
-        hsv_upper: Tuple[int, int, int] = (30, 255, 255),
+        hsv_lower: Tuple[int, int, int] = (60, 35, 55),
+        hsv_upper: Tuple[int, int, int] = (90, 255, 220),
         min_area_px: float = 25.0,
         max_area_px: float = 3000.0,
+        black_value_max: int = 55,
+        min_black_fraction: float = 0.08,
     ) -> None:
         self._lower = np.array(hsv_lower, dtype=np.uint8)
         self._upper = np.array(hsv_upper, dtype=np.uint8)
         self._min_area = min_area_px
         self._max_area = max_area_px
+        self._black_value_max = black_value_max
+        self._min_black_fraction = min_black_fraction
 
-    def detect(self, frame: np.ndarray, frame_idx: int) -> Optional[Tuple[float, float, float]]:
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    def detect(
+        self, frame: np.ndarray, frame_idx: int, roi: Optional[Roi] = None
+    ) -> Optional[Tuple[float, float, float]]:
+        search_frame = frame
+        ox, oy = 0, 0
+        if roi is not None:
+            ox, oy, rx1, ry1 = roi
+            search_frame = frame[oy:ry1, ox:rx1]
+            if search_frame.size == 0:
+                return None
+
+        hsv = cv2.cvtColor(search_frame, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self._lower, self._upper)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -85,12 +167,44 @@ class ColorThresholdSackDetector:
         if not candidates:
             return None
 
-        best = max(candidates, key=cv2.contourArea)
+        # Green alone isn't discriminative enough against real backgrounds —
+        # tree canopy/foliage sits in the same hue range and, restricted to
+        # just this ROI, was still winning over the actual sack in testing
+        # (see the class docstring). The sack is a two-tone panelled ball
+        # (~40% near-black fabric butted right up against the green panels),
+        # which ordinary foliage doesn't have, so require a real fraction of
+        # near-black pixels in a padded window around each candidate blob
+        # before accepting it — this is the check that actually separates
+        # "a leaf" from "the ball" at this resolution.
+        frame_h, frame_w = search_frame.shape[:2]
+        v_channel = hsv[:, :, 2]
+        scored = []
+        for c in candidates:
+            x, y, w, h = cv2.boundingRect(c)
+            pad = max(w, h)  # generous — the ball's black panels can be a similar size to its green ones
+            wx0, wy0 = max(0, x - pad), max(0, y - pad)
+            wx1, wy1 = min(frame_w, x + w + pad), min(frame_h, y + h + pad)
+            window = v_channel[wy0:wy1, wx0:wx1]
+            if window.size == 0:
+                continue
+            black_fraction = float(np.mean(window < self._black_value_max))
+            if black_fraction < self._min_black_fraction:
+                continue
+            area = cv2.contourArea(c)
+            scored.append((area, black_fraction, c))
+
+        if not scored:
+            return None
+
+        # Among candidates that pass the black-adjacency check, prefer the
+        # largest — same rationale as before (max_area filter already caps
+        # implausibly large blobs, so bigger among survivors is more likely
+        # a real, closer/clearer view of the ball than sensor noise).
+        area, black_fraction, best = max(scored, key=lambda s: s[0])
         (x, y), radius = cv2.minEnclosingCircle(best)
-        area = cv2.contourArea(best)
         circularity = area / (math.pi * radius**2 + 1e-6)
         confidence = float(np.clip(circularity, 0.0, 1.0))
-        return x, y, confidence
+        return ox + x, oy + y, confidence
 
 
 class MockMotionSackDetector:
@@ -112,7 +226,9 @@ class MockMotionSackDetector:
         self._apex_y = frame_height * apex_ratio
         self._ground_y = frame_height * ground_ratio
 
-    def detect(self, frame: np.ndarray, frame_idx: int) -> Optional[Tuple[float, float, float]]:
+    def detect(
+        self, frame: np.ndarray, frame_idx: int, roi: Optional[Roi] = None
+    ) -> Optional[Tuple[float, float, float]]:
         phase = (frame_idx % self._period) / self._period
         x = self._w * (0.3 + 0.4 * phase)
         # Parabola: 0 at phase 0/1 (ground), 1 at phase 0.5 (apex)
@@ -136,12 +252,33 @@ class SackTracker:
         self._trail_maxlen = config.trail_length
         self._frames_since_detection = 0
 
-    def update(self, frame: np.ndarray, frame_idx: int) -> Optional[SackState]:
-        detection = self._detector.detect(frame, frame_idx)
+    def update(
+        self, frame: np.ndarray, frame_idx: int, roi: Optional[Roi] = None
+    ) -> Optional[SackState]:
+        detection = self._detector.detect(frame, frame_idx, roi)
         measurement: Optional[Point] = None
 
         if detection is not None and detection[2] >= self._config.sack_confidence:
-            measurement = (detection[0], detection[1])
+            candidate = (detection[0], detection[1])
+            # Reject an implausible frame-to-frame teleport rather than
+            # yanking an established track onto it — this is what actually
+            # rejects a color-threshold false positive (a backlit palm frond
+            # in testing scored high enough to pass every per-frame check,
+            # but was ~800px from where the ball actually was). Only gated
+            # while the track is recently confirmed; after a real occlusion
+            # long enough to exceed the relax threshold, let it re-lock
+            # anywhere rather than staying pinned to a stale prediction.
+            if (
+                self._kf.initialized
+                and self._frames_since_detection <= self._config.sack_gate_relax_after_missed_frames
+            ):
+                predicted = self._kf.peek_predicted_position()
+                jump = math.hypot(candidate[0] - predicted[0], candidate[1] - predicted[1])
+                if jump > self._config.sack_max_jump_px:
+                    candidate = None
+            measurement = candidate
+
+        if measurement is not None:
             self._frames_since_detection = 0
         else:
             self._frames_since_detection += 1

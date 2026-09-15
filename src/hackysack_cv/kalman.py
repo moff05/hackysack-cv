@@ -40,6 +40,17 @@ class KalmanFilter2D:
         return float(self._state[0, 0]), float(self._state[1, 0])
 
     @property
+    def initialized(self) -> bool:
+        return self._initialized
+
+    def peek_predicted_position(self) -> Point:
+        """What `predict()` would return, without mutating filter state —
+        lets a caller gate an incoming measurement against the current
+        trajectory before deciding whether to feed it into `update()`."""
+        predicted_state = self._F @ self._state
+        return float(predicted_state[0, 0]), float(predicted_state[1, 0])
+
+    @property
     def velocity(self) -> Point:
         return float(self._state[2, 0]), float(self._state[3, 0])
 

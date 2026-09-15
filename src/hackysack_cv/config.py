@@ -22,6 +22,18 @@ class AppConfig:
     """Fraction of frame height treated as ground contact plane, since we don't
     have real-world floor geometry without a calibrated camera."""
 
+    # --- Sack detection search region ---
+    sack_roi_horizontal_margin_scale: float = 0.75
+    """How far the sack search region extends past the leftmost/rightmost
+    tracked player, as a multiple of median player bbox width."""
+    sack_roi_upward_margin_scale: float = 1.2
+    """How far above the topmost player's head the sack search region
+    extends, as a multiple of median player bbox height. Kept modest on
+    purpose: a real kick rarely clears much more than a body-height above
+    the head, and the whole point of this ROI is to exclude tree canopy /
+    background clutter sitting further up the frame — see
+    ColorThresholdSackDetector's false-positive history in sack_tracker.py."""
+
     # --- Sack trajectory / touch detection ---
     touch_radius_px: int = 60
     trail_length: int = 15
@@ -39,6 +51,21 @@ class AppConfig:
     kalman_max_coast_frames: int = 15
     """How many consecutive missed detections (occlusion) the filter will
     keep predicting through before it gives up on the current track."""
+    sack_max_jump_px: float = 250.0
+    """A detection more than this far from the filter's predicted position
+    is rejected as a measurement (treated like a miss) rather than yanking
+    the track onto it. This is what actually rejects a color-threshold
+    false-positive jumping to a random spot elsewhere in frame (a backlit
+    palm frond in testing) — the real sack can't teleport between frames.
+    Rough starting point relative to this project's ~1920px-wide test
+    footage at 30fps; if a genuinely fast kick keeps getting rejected as an
+    "impossible jump", raise this. Only enforced once the track is
+    established and recently confirmed — see sack_gate_relax_after_missed_frames."""
+    sack_gate_relax_after_missed_frames: int = 5
+    """Once a track has coasted through more than this many consecutive
+    missed detections, the jump gate is skipped so the track can re-lock
+    onto the ball anywhere in frame after a real occlusion, instead of
+    staying gated to an increasingly stale predicted position."""
 
     # --- Kinematics ---
     reference_player_height_m: float = 1.75

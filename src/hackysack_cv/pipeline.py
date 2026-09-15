@@ -16,6 +16,7 @@ from hackysack_cv.sack_tracker import (
     MockMotionSackDetector,
     SackTracker,
     build_sack_detector,
+    compute_search_roi,
 )
 from hackysack_cv.types import GameStats
 
@@ -61,7 +62,8 @@ class HackySackAnalyzer:
                     break
 
                 players = player_tracker.update(frame)
-                sack_state = sack_tracker.update(frame, frame_idx)
+                roi = compute_search_roi(players, width, height, self.config)
+                sack_state = sack_tracker.update(frame, frame_idx, roi)
 
                 scale = estimate_meters_per_pixel(players, self.config.reference_player_height_m)
                 if scale is not None:
