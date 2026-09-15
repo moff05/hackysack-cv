@@ -77,6 +77,13 @@ def compute_search_roi(
 
 
 class SackDetector(Protocol):
+    acceptance_threshold: float
+    """Minimum `detect()` confidence SackTracker should actually act on. Not
+    a shared/comparable scale across implementations — a trained model's
+    class probability and a color-blob's circularity score mean different
+    things at the same numeric value, so each detector sets its own rather
+    than SackTracker applying one fixed cutoff to whichever is active."""
+
     def detect(
         self, frame: np.ndarray, frame_idx: int, roi: Optional[Roi] = None
     ) -> Optional[Tuple[float, float, float]]:
@@ -88,11 +95,23 @@ class SackDetector(Protocol):
 class YoloSackDetector:
     """Wraps a custom-trained Ultralytics model whose only class is the sack."""
 
-    def __init__(self, model_path: str, confidence: float = 0.35) -> None:
+    def __init__(self, model_path: str, confidence: float = 0.35, imgsz: int = 1280) -> None:
         from ultralytics import YOLO  # deferred import: heavy + optional
 
         self._model = YOLO(model_path)
         self._confidence = confidence
+        # SackTracker gates on this instead of a fixed constant, since a
+        # trained model's confidence scale and a color-detector's circularity
+        # score are not the same thing at all (see ColorThresholdSackDetector).
+        self.acceptance_threshold = confidence
+        # Must match (or be a deliberate multiple of) the imgsz the model was
+        # trained at. predict() silently defaults to 640 if this isn't passed
+        # explicitly, which does NOT come from the checkpoint's training
+        # config — training the sack_detector.pt shipped here used imgsz=1280
+        # specifically because the ball is only ~15-25px across in the source
+        # 1920x1440 footage; leaving this unset was caught costing real
+        # detections on real footage, not just a theoretical concern.
+        self._imgsz = imgsz
 
     def detect(
         self, frame: np.ndarray, frame_idx: int, roi: Optional[Roi] = None
@@ -105,7 +124,7 @@ class YoloSackDetector:
             if search_frame.size == 0:
                 return None
 
-        results = self._model.predict(search_frame, conf=self._confidence, verbose=False)
+        results = self._model.predict(search_frame, imgsz=self._imgsz, conf=self._confidence, verbose=False)
         if not results or results[0].boxes is None or len(results[0].boxes) == 0:
             return None
         boxes = results[0].boxes
@@ -137,6 +156,7 @@ class ColorThresholdSackDetector:
         max_area_px: float = 3000.0,
         black_value_max: int = 55,
         min_black_fraction: float = 0.08,
+        acceptance_threshold: float = 0.35,
     ) -> None:
         self._lower = np.array(hsv_lower, dtype=np.uint8)
         self._upper = np.array(hsv_upper, dtype=np.uint8)
@@ -144,6 +164,10 @@ class ColorThresholdSackDetector:
         self._max_area = max_area_px
         self._black_value_max = black_value_max
         self._min_black_fraction = min_black_fraction
+        # Circularity-based, not a model's class probability — 0.35 here
+        # means something completely different than 0.35 does for
+        # YoloSackDetector. SackTracker gates on whichever detector reports.
+        self.acceptance_threshold = acceptance_threshold
 
     def detect(
         self, frame: np.ndarray, frame_idx: int, roi: Optional[Roi] = None
@@ -225,6 +249,7 @@ class MockMotionSackDetector:
         self._period = period_frames
         self._apex_y = frame_height * apex_ratio
         self._ground_y = frame_height * ground_ratio
+        self.acceptance_threshold = 0.0  # always returns confidence=1.0 below; any threshold passes
 
     def detect(
         self, frame: np.ndarray, frame_idx: int, roi: Optional[Roi] = None
@@ -258,7 +283,7 @@ class SackTracker:
         detection = self._detector.detect(frame, frame_idx, roi)
         measurement: Optional[Point] = None
 
-        if detection is not None and detection[2] >= self._config.sack_confidence:
+        if detection is not None and detection[2] >= self._detector.acceptance_threshold:
             candidate = (detection[0], detection[1])
             # Reject an implausible frame-to-frame teleport rather than
             # yanking an established track onto it — this is what actually
@@ -311,5 +336,5 @@ def build_sack_detector(config: AppConfig, frame_width: int, frame_height: int) 
     one just by dropping weights into `models/sack_detector.pt`.
     """
     if config.sack_model_path and Path(config.sack_model_path).exists():
-        return YoloSackDetector(config.sack_model_path, confidence=config.sack_confidence)
-    return ColorThresholdSackDetector()
+        return YoloSackDetector(config.sack_model_path, confidence=config.sack_model_confidence)
+    return ColorThresholdSackDetector(acceptance_threshold=config.sack_confidence)

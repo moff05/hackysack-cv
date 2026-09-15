@@ -13,8 +13,27 @@ class AppConfig:
     # --- Models ---
     pose_model_path: str = "yolov8n-pose.pt"
     sack_model_path: Optional[str] = "models/sack_detector.pt"
+    player_tracker_config: str = "configs/player_tracker.yaml"
+    """Custom tracker (botsort + appearance ReID, longer occlusion buffer)
+    replacing Ultralytics' bytetrack.yaml default — see that file's header
+    for why: bytetrack has no appearance model, so 3 similar-build players
+    briefly occluding each other kept getting reborn as new track IDs
+    instead of reconnecting to who they already were."""
     pose_confidence: float = 0.4
     sack_confidence: float = 0.35
+    """Acceptance threshold for ColorThresholdSackDetector's circularity
+    score only. NOT comparable to sack_model_confidence below — see
+    SackDetector.acceptance_threshold in sack_tracker.py."""
+    sack_model_confidence: float = 0.25
+    """Acceptance threshold for the trained YoloSackDetector's class
+    probability. Was 0.08 when the model was fine-tuned on only 8 positive
+    examples (a correct detection scored as low as ~0.11 confidence from
+    that undertrained a model). After round 2 (180 positive examples,
+    bootstrapped from the model's own predictions and manually verified —
+    see project notes) the same real detection scores ~0.70, so the
+    threshold came back up to something closer to a normal YOLO default.
+    Re-check this any time the model is retrained on a meaningfully
+    different dataset."""
 
     # --- Video ---
     fps: float = 60.0

@@ -9,3 +9,9 @@ models/*.pt
 *.pt
 
 *.egg-info/
+
+# Training data/runs are regenerated from the real video via the mining
+# scripts described in project notes -- not meant to be versioned (dataset/
+# alone is 200+MB of frame crops).
+dataset/
+runs/

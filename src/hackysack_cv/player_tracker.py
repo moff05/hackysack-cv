@@ -20,12 +20,13 @@ class PlayerTracker:
 
         self._model = YOLO(config.pose_model_path)
         self._confidence = config.pose_confidence
+        self._config = config
 
     def update(self, frame: np.ndarray) -> List[PlayerState]:
         results = self._model.track(
             frame,
             persist=True,
-            tracker="bytetrack.yaml",
+            tracker=self._config.player_tracker_config,
             conf=self._confidence,
             verbose=False,
         )

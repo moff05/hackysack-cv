@@ -1,0 +1,37 @@
+# Custom player-tracking config, replacing Ultralytics' bytetrack.yaml default.
+#
+# Why: bytetrack only matches tracks frame-to-frame by motion/box-overlap —
+# it has no idea what any given player actually looks like. With 3 similar
+# build, similarly-dressed players standing close together on a small
+# driveway (frequent brief occlusion as they cross in front of each other),
+# that's exactly the case where a lost track gets a brand-new ID instead of
+# reconnecting to the player it already was — observed directly as ID labels
+# climbing (P1/P2/P3 -> P10/P18/P20/P30...) for what's really always the
+# same 3 people.
+#
+# botsort + with_reid adds an appearance embedding to the matching cost, so
+# a reappearing player can be re-matched by what they look like, not just
+# where a box happened to land. track_buffer raised well past the
+# bytetrack/botsort default of 30 frames (1s @ 30fps) so a track survives a
+# multi-second occlusion instead of being deleted and reborn as a new ID.
+tracker_type: botsort
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.25
+track_buffer: 150 # 5s @ 30fps
+match_thresh: 0.8
+fuse_score: True
+gmc_method: sparseOptFlow
+
+proximity_thresh: 0.5
+appearance_thresh: 0.8
+# Tried loosening this to 0.7 alongside a shorter (90-frame) buffer -- no
+# measurable improvement in ID stability on real footage, only added risk
+# of merging two different people onto one ID. Reverted. The real
+# bottleneck is with_reid's "auto" mode reusing the detector's own features
+# rather than a trained appearance-embedding model -- not discriminative
+# enough for 3 similar-build, similarly-dressed players. A real ReID model
+# (or accepting this as a known limitation) is the next lever, not further
+# threshold tuning.
+with_reid: True
+model: auto # uses the detector's own features -- no separate ReID model/download needed
