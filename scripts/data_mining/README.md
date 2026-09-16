@@ -91,15 +91,24 @@ means sky-only. Closing it needs a fresh, differently-targeted manual hunt:
 **Round 3 outcome, verified against real footage, not just training metrics:**
 still missed a held-out ground-level test case entirely, and even the 4
 training examples only scored ~0.08 confidence -- 5 examples were too thin
-a fraction of ~155 total positives to actually get learned. Worse, it
-introduced a real false positive on plain pavement that round 2 didn't
-have (confirmed by zooming into the exact spot -- no ball there). Net: a
-wash at best. Lesson banked here so it isn't relearned: **a handful of
-new-domain examples mixed into a much larger existing population doesn't
-reliably teach the new domain — it can just add noise to the decision
-boundary instead.** Don't declare a round done on "it trained and metrics
-look fine"; re-verify the *specific* thing you added against real footage
-before moving on.
+a fraction of ~155 total positives to actually get learned strongly.
+
+What looked at first like a second, worse problem -- a "false positive" on
+plain pavement -- turned out to be a **verification methodology error, not
+a real bug**: zooming into the annotated *output* video at that spot showed
+nothing, but the actual source frame at the identical pixel coordinates
+has a real, correctly-detected ball there the whole time. The tracker's
+own drawn marker (a solid dot with real screen radius) was fully covering
+the ~20px ball underneath it in the rendered frame, so inspecting the
+annotated output made a correct detection look like empty ground. Caught
+during round 4 by cross-checking the same coordinates against the raw
+source video instead of the annotated one. **Lesson: when investigating a
+suspected false positive on a small object, always check the raw source
+frame, never the annotated output** -- the overlay can hide the exact
+evidence you're trying to see. (The genuine round-3 finding stands: 5
+examples was still too thin to reliably teach a new visual domain, which
+is why round 4 happened -- just not because of a false-positive regression
+that, on closer inspection, was never real.)
 
 ## Round 4 (more ground-level, at real volume this time)
 
@@ -123,6 +132,14 @@ frame — several landed on a fence, a car, or empty pavement instead of the
 ball. Always generate the zoomed verification crop and look at it before
 trusting a manually-transcribed bbox; don't skip straight from "I can see
 the ball in the review thumbnail" to writing down coordinates.
+
+**Round 4 outcome, verified against real footage:** a real, clean
+improvement -- a held-out ground-level validation example (never seen in
+training) went from zero detections in round 3 to correctly detected at
+~0.28 confidence. Sky detection unaffected. No confirmed false positives
+(see the round-3 correction above about how to actually check this).
+Metrics also improved across the board (P 0.928, R 0.909, mAP50 0.919 vs
+round 3's 0.876/0.839/0.854).
 
 **Still open after round 4:** 16 examples is better but still thin for a
 domain this visually varied (shoes, tree trunks, fence bars, motion blur,
