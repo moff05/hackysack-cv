@@ -88,9 +88,48 @@ means sky-only. Closing it needs a fresh, differently-targeted manual hunt:
    ever-more sky negatives.
 6. Retrain and re-verify against real footage, same as round 2.
 
-**Still open after round 3:** only 5 ground-level examples is thin for an
-entirely new visual domain — expect this to help some but not fully close
-the gap. If ground-level detection is still weak after retraining, the
-next lever is running steps 3-5 again against the ~200 kick events not
-yet sampled (mine_ground_level.py currently only samples roughly a third
-of them), not a fundamentally different approach.
+**Round 3 outcome, verified against real footage, not just training metrics:**
+still missed a held-out ground-level test case entirely, and even the 4
+training examples only scored ~0.08 confidence -- 5 examples were too thin
+a fraction of ~155 total positives to actually get learned. Worse, it
+introduced a real false positive on plain pavement that round 2 didn't
+have (confirmed by zooming into the exact spot -- no ball there). Net: a
+wash at best. Lesson banked here so it isn't relearned: **a handful of
+new-domain examples mixed into a much larger existing population doesn't
+reliably teach the new domain — it can just add noise to the decision
+boundary instead.** Don't declare a round done on "it trained and metrics
+look fine"; re-verify the *specific* thing you added against real footage
+before moving on.
+
+## Round 4 (more ground-level, at real volume this time)
+
+Same method as round 3, but exhaustive instead of sampled — `find_kick_peaks_remaining.py`
+computes the ~206 kick events round 3's sampling skipped, then
+`mine_ground_level_r4_all.py` (same as `mine_ground_level.py` but reads that
+file and processes all of it, no further subsampling) mines every one of
+them. Reviewing all 206 found 11 more confirmed sightings (~5%, consistent
+with round 3's hit rate — confirms round 3's number wasn't a fluke, this
+heuristic just has a real ~5% ceiling). Combined with round 3's 5, that's
+16 ground-level examples out of ~163 total positives (~10%), a much
+healthier fraction than round 3's ~3%.
+
+**Bbox measurement pitfall, hit hard this round:** estimating a bbox's
+absolute frame coordinates by eyeballing its position within a *thumbnail*
+review crop (e.g. "the ball looks like it's about 60% across, 70% down
+this 280x280 image") and doing that arithmetic in your head is unreliable
+enough that it produced a *wrong bbox for nearly every one of the first 11*
+when checked against a tight, zoomed, native-resolution crop of the exact
+frame — several landed on a fence, a car, or empty pavement instead of the
+ball. Always generate the zoomed verification crop and look at it before
+trusting a manually-transcribed bbox; don't skip straight from "I can see
+the ball in the review thumbnail" to writing down coordinates.
+
+**Still open after round 4:** 16 examples is better but still thin for a
+domain this visually varied (shoes, tree trunks, fence bars, motion blur,
+wildly different apparent ball sizes depending on camera distance). All
+309 kick events have now been sampled once (at 8 frames before each peak),
+so mining more can't just mean "sample the events you haven't looked at
+yet" anymore — the next lever is a *second* timing offset per event (e.g.
+4 frames before peak instead of 8) to get an independent second sample of
+each kick, since the same events likely show the ball at a different,
+still-useful position at a different offset.
