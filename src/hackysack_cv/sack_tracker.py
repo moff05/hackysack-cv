@@ -17,6 +17,7 @@ interface so `SackTracker` doesn't care which one it's holding.
 from __future__ import annotations
 
 import math
+from collections import deque
 from pathlib import Path
 from typing import Optional, Protocol, Tuple
 
@@ -255,7 +256,7 @@ class MockMotionSackDetector:
         self, frame: np.ndarray, frame_idx: int, roi: Optional[Roi] = None
     ) -> Optional[Tuple[float, float, float]]:
         phase = (frame_idx % self._period) / self._period
-        x = self._w * (0.3 + 0.4 * phase)
+        x = self._w * (0.5 - 0.2 * math.cos(math.pi * frame_idx / self._period))
         # Parabola: 0 at phase 0/1 (ground), 1 at phase 0.5 (apex)
         arc = 4.0 * phase * (1.0 - phase)
         y = self._ground_y - arc * (self._ground_y - self._apex_y)
@@ -283,7 +284,8 @@ class SackTracker:
         detection = self._detector.detect(frame, frame_idx, roi)
         measurement: Optional[Point] = None
 
-        if detection is not None and detection[2] >= self._detector.acceptance_threshold:
+        if (detection is not None and all(math.isfinite(v) for v in detection)
+                and detection[2] >= self._detector.acceptance_threshold):
             candidate = (detection[0], detection[1])
             # Reject an implausible frame-to-frame teleport rather than
             # yanking an established track onto it — this is what actually
@@ -296,6 +298,7 @@ class SackTracker:
             if (
                 self._kf.initialized
                 and self._frames_since_detection <= self._config.sack_gate_relax_after_missed_frames
+                and self._frames_since_detection <= self._config.kalman_max_coast_frames
             ):
                 predicted = self._kf.peek_predicted_position()
                 jump = math.hypot(candidate[0] - predicted[0], candidate[1] - predicted[1])
@@ -304,8 +307,13 @@ class SackTracker:
             measurement = candidate
 
         if measurement is not None:
+            if self._frames_since_detection > self._config.kalman_max_coast_frames:
+                self._kf.reset(measurement)
+                self._state = SackState(position=measurement, velocity=(0.0, 0.0))
             self._frames_since_detection = 0
         else:
+            if not self._kf.initialized:
+                return None
             self._frames_since_detection += 1
             if self._frames_since_detection > self._config.kalman_max_coast_frames:
                 return None  # track considered lost; caller should treat sack as absent
@@ -313,7 +321,7 @@ class SackTracker:
         position = self._kf.update(measurement)
         velocity = self._kf.velocity
 
-        trail = self._state.trail
+        trail = deque(self._state.trail, maxlen=self._trail_maxlen)
         trail.append(position)
         while len(trail) > self._trail_maxlen:
             trail.popleft()

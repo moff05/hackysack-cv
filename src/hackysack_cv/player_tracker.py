@@ -1,4 +1,4 @@
-"""Multi-player pose tracking via Ultralytics YOLO pose + ByteTrack."""
+"""Multi-player pose tracking via Ultralytics YOLO pose + BoT-SORT."""
 
 from __future__ import annotations
 

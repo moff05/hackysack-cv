@@ -1,10 +1,6 @@
 """Video annotation: player boxes/skeletons, sack trail, and the stats HUD.
 
-Drawing is done with plain OpenCV primitives rather than `supervision`'s
-annotator classes - their pose/keypoint API has shifted across versions and
-plain `cv2.circle`/`cv2.line` calls are trivial to keep stable here. The
-`supervision` package is still listed as a dependency (per the original
-spec) and is trivial to swap in if you prefer its annotators.
+Drawing uses OpenCV primitives with no additional annotation dependencies.
 """
 
 from __future__ import annotations
@@ -88,57 +84,52 @@ def draw_dashboard(
     stats: GameStats,
     kinematics: Optional[KinematicsResult],
 ) -> None:
+    """Render on a reference canvas, then fit to small and portrait videos."""
     h, w = frame.shape[:2]
-    panel_w, panel_h = 260, 175
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (10, 10), (10 + panel_w, 10 + panel_h), (20, 20, 20), -1)
-    cv2.addWeighted(overlay, config.hud_panel_alpha, frame, 1 - config.hud_panel_alpha, 0, frame)
+    panel = np.full((232, 300, 3), (25, 23, 20), dtype=np.uint8)
+    cv2.rectangle(panel, (0, 0), (4, 231), SACK_COLOR, -1)
+    def label(text, y, size=0.5, color=(230, 230, 230)):
+        cv2.putText(panel, text, (18, y), cv2.FONT_HERSHEY_SIMPLEX,
+                    size * config.hud_font_scale / 0.6, color, 1, cv2.LINE_AA)
+    label("FOOTBAG / SESSION", 28, 0.55, SACK_COLOR)
+    label(str(stats.current_round_touches), 80, 1.5)
+    label("TOUCHES THIS ROUND", 105, 0.42, (165, 165, 165))
+    label(f"Total {stats.total_touches}   Best {stats.best_round_touches}   Drops {stats.total_drops}", 139)
+    cv2.line(panel, (18, 153), (280, 153), (65, 65, 65), 1)
+    label(f"Est. speed   {kinematics.speed_mph:.1f} mph" if kinematics else "Est. speed   --", 180)
+    label(f"Est. height  {kinematics.apex_height_ft:.2f} ft" if kinematics else "Est. height  --", 208)
+    scale = min(1.0, max(1, w - 20) / 300, max(1, h - 55) / 232)
+    pw, ph = max(1, int(300 * scale)), max(1, int(232 * scale))
+    panel = cv2.resize(panel, (pw, ph))
+    x, y = min(10, w - pw), min(10, h - ph)
+    target = frame[y:y + ph, x:x + pw]
+    cv2.addWeighted(panel, config.hud_panel_alpha, target, 1 - config.hud_panel_alpha, 0, target)
+    if w >= 600:
+        _draw_leaderboard(frame, stats, x=w - 270, y=10)
 
-    total_drops = sum(stats.player_errors.values())
-    lines = [
-        f"Round touches: {stats.current_round_touches}",
-        f"Total touches: {stats.total_touches}",
-        f"Total drops: {total_drops}",
-    ]
-    if kinematics is not None:
-        lines.append(f"Speed: {kinematics.speed_mph:.1f} mph")
-        lines.append(f"Height: {kinematics.apex_height_ft:.2f} ft")
-    else:
-        lines.append("Speed: --")
-        lines.append("Height: --")
 
-    y = 35
-    for line in lines:
-        cv2.putText(
-            frame, line, (22, y), cv2.FONT_HERSHEY_SIMPLEX, config.hud_font_scale, (255, 255, 255), 1, cv2.LINE_AA
-        )
-        y += 28
-
-    _draw_leaderboard(frame, stats, x=w - 270, y=10)
+def draw_tracking_status(frame: np.ndarray, sack: Optional[SackState], synthetic: bool = False) -> None:
+    h, w = frame.shape[:2]
+    status = "SYNTHETIC DEMO" if synthetic else "SACK MISSING" if sack is None else "SACK PREDICTED" if sack.is_coasting else "SACK DETECTED"
+    size = min(0.5, max(0.15, (w - 20) / 350))
+    cv2.rectangle(frame, (0, max(0, h - 30)), (w, h), (25, 23, 20), -1)
+    cv2.putText(frame, status, (8, max(10, h - 10)), cv2.FONT_HERSHEY_SIMPLEX, size, SACK_COLOR, 1, cv2.LINE_AA)
 
 
 def _draw_leaderboard(frame: np.ndarray, stats: GameStats, x: int, y: int) -> None:
-    player_ids = sorted(set(stats.player_touch_counts) | set(stats.player_errors))
+    player_ids = sorted(set(stats.player_touch_counts) | set(stats.player_errors),
+                        key=lambda pid: (-stats.player_touch_counts.get(pid, 0), pid))
     if not player_ids:
         return
-
     row_h = 24
-    panel_w, panel_h = 260, row_h * (len(player_ids) + 1) + 10
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (x, y), (x + panel_w, y + panel_h), (20, 20, 20), -1)
-    cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
-
-    header_y = y + 20
-    cv2.putText(
-        frame, "Player  Touches  Errors", (x + 10, header_y),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA,
-    )
+    max_rows = max(0, (frame.shape[0] - y - 70) // row_h)
+    player_ids = player_ids[:max_rows]
+    panel_h = row_h * (len(player_ids) + 1) + 10
+    region = frame[y:y + panel_h, x:x + 260]
+    region[:] = (region.astype(np.float32) * 0.4 + np.array([25, 23, 20]) * 0.6).astype(np.uint8)
+    cv2.putText(frame, "PLAYER  TOUCHES  ERRORS", (x + 10, y + 20), cv2.FONT_HERSHEY_SIMPLEX,
+                0.45, (220, 220, 220), 1, cv2.LINE_AA)
     for i, pid in enumerate(player_ids):
-        row_y = header_y + row_h * (i + 1)
-        color = _player_color(pid)
-        touches = stats.player_touch_counts.get(pid, 0)
-        errors = stats.player_errors.get(pid, 0)
-        cv2.putText(
-            frame, f"P{pid}      {touches:<8}{errors}", (x + 10, row_y),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA,
-        )
+        cv2.putText(frame, f"P{pid:<5} {stats.player_touch_counts.get(pid, 0):<8} {stats.player_errors.get(pid, 0)}",
+                    (x + 10, y + 20 + row_h * (i + 1)), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, _player_color(pid), 1, cv2.LINE_AA)

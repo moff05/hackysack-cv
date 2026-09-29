@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -49,6 +50,7 @@ class AppConfig:
 
     # --- Video ---
     fps: float = 60.0
+    ground_reset_margin_px: float = 20.0
     ground_line_ratio: float = 0.92
     """Fraction of frame height treated as ground contact plane, since we don't
     have real-world floor geometry without a calibrated camera."""
@@ -115,3 +117,31 @@ class AppConfig:
             "chest",
         )
     )
+
+    def __post_init__(self) -> None:
+        for name in ("fps", "reference_player_height_m", "touch_radius_px",
+                     "sack_max_jump_px", "kalman_process_noise", "kalman_measurement_noise",
+                     "inflection_min_delta_vy", "ground_reset_margin_px", "hud_font_scale"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and greater than zero")
+        for name in ("pose_confidence", "sack_confidence", "sack_model_confidence",
+                     "hud_panel_alpha", "ground_line_ratio"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or not 0 <= value <= 1:
+                raise ValueError(f"{name} must be between 0 and 1")
+        if self.ground_line_ratio == 0:
+            raise ValueError("ground_line_ratio must be greater than zero")
+        for name in ("trail_length", "pose_model_imgsz", "velocity_smoothing_window"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        for name in ("event_cooldown_frames", "kalman_max_coast_frames",
+                     "sack_gate_relax_after_missed_frames"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
+        for name in ("sack_roi_horizontal_margin_scale", "sack_roi_upward_margin_scale"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and nonnegative")

@@ -17,3 +17,8 @@ models/*.pt
 dataset/
 runs/
 scripts/data_mining/work/
+
+# Generated analysis reports and previews
+output/*.json
+output/*.jpg
+output/*.html

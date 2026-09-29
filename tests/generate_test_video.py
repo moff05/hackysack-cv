@@ -12,6 +12,8 @@ footage of people playing.
 from __future__ import annotations
 
 import argparse
+import math
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -24,27 +26,35 @@ def generate(
     fps: int = 60,
     duration_s: float = 6.0,
     period_frames: int = 45,
-    ball_color_bgr: tuple[int, int, int] = (30, 160, 250),  # orange, matches
+    ball_color_bgr: tuple[int, int, int] = (120, 165, 90),  # green, matches
     # ColorThresholdSackDetector's default HSV range in sack_tracker.py
     ball_radius: int = 14,
 ) -> None:
+    if min(width, height, fps, duration_s, period_frames, ball_radius) <= 0:
+        raise ValueError("Video dimensions, timing, and radius must be positive")
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     total_frames = int(duration_s * fps)
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+    if not writer.isOpened():
+        raise OSError(f"Cannot write video: {output_path}")
 
     ground_y = int(height * 0.85)
     apex_y = int(height * 0.35)
 
     for frame_idx in range(total_frames):
-        frame = np.full((height, width, 3), (40, 90, 40), dtype=np.uint8)  # grass green
+        frame = np.full((height, width, 3), (120, 125, 140), dtype=np.uint8)  # neutral ground
         cv2.line(frame, (0, ground_y), (width, ground_y), (70, 70, 70), 2)
 
         phase = (frame_idx % period_frames) / period_frames
-        x = int(width * (0.15 + 0.7 * phase))
+        x = int(width * (0.5 - 0.2 * math.cos(math.pi * frame_idx / period_frames)))
         arc = 4.0 * phase * (1.0 - phase)
         y = int(ground_y - arc * (ground_y - apex_y))
 
-        cv2.circle(frame, (x, y), ball_radius, ball_color_bgr, -1)
+        cv2.circle(frame, (x, y), ball_radius + 8, (10, 10, 10), -1)
+        cv2.circle(frame, (x - 5, y - 3), ball_radius, ball_color_bgr, -1)
+        cv2.circle(frame, (x + 4, y + 4), ball_radius // 2, (10, 10, 10), -1)
         writer.write(frame)
 
     writer.release()

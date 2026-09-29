@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from hackysack_cv.config import AppConfig
 from hackysack_cv.types import DropEvent, GameStats, PlayerState, Point, SackState, TouchEvent
@@ -24,13 +24,15 @@ def _distance(a: Point, b: Point) -> float:
 
 
 def _nearest_player(
-    players: List[PlayerState], sack_pos: Point
+    players: List[PlayerState], sack_pos: Point, allowed: tuple[str, ...]
 ) -> Optional[Tuple[int, str, float]]:
     """Closest (player_id, keypoint_name, distance) across all tracked players'
     ankle/knee/chest points."""
     best: Optional[Tuple[int, str, float]] = None
     for player in players:
         for name, point in player.named_keypoints.items():
+            if name not in allowed:
+                continue
             dist = _distance(point, sack_pos)
             if best is None or dist < best[2]:
                 best = (player.player_id, name, dist)
@@ -49,6 +51,8 @@ class GameStateManager:
         self._ground_y = frame_height * config.ground_line_ratio
         self.stats = GameStats()
         self._prev_vy: Optional[float] = None
+        self._prev_frame: Optional[int] = None
+        self._ground_latched = False
         self._last_event_frame: int = -config.event_cooldown_frames
 
     @property
@@ -59,19 +63,29 @@ class GameStateManager:
         return (frame_idx - self._last_event_frame) >= self._config.event_cooldown_frames
 
     def process(
-        self, frame_idx: int, sack: SackState, players: List[PlayerState]
+        self, frame_idx: int, sack: Optional[SackState], players: List[PlayerState]
     ) -> FrameEvents:
         events = FrameEvents()
+        if sack is None or sack.is_coasting:
+            self._prev_vy = None
+            self._prev_frame = None
+            return events
+        if self._prev_frame is not None and frame_idx != self._prev_frame + 1:
+            self._prev_vy = None
+        self._prev_frame = frame_idx
+        if sack.position[1] < self._ground_y - self._config.ground_reset_margin_px:
+            self._ground_latched = False
         vy = sack.velocity[1]
         prev_vy = self._prev_vy
         self._prev_vy = vy
 
-        if prev_vy is None or not self._cooldown_elapsed(frame_idx):
+        if not self._cooldown_elapsed(frame_idx):
             return events
 
-        nearest = _nearest_player(players, sack.position)
+        nearest = _nearest_player(players, sack.position, self._config.tracked_keypoints)
         is_inflection = (
-            prev_vy > 0
+            prev_vy is not None
+            and prev_vy > 0
             and vy < 0
             and (prev_vy - vy) >= self._config.inflection_min_delta_vy
         )
@@ -85,8 +99,9 @@ class GameStateManager:
             return events
 
         hit_ground = sack.position[1] >= self._ground_y
-        if hit_ground and not is_inflection:
-            attributed_player = nearest[0] if nearest is not None else None
+        if hit_ground and not self._ground_latched and not is_inflection:
+            self._ground_latched = True
+            attributed_player = nearest[0] if near_a_player else None
             self.stats.record_drop(attributed_player)
             events.drop = DropEvent(
                 frame_idx=frame_idx, player_id=attributed_player, position=sack.position

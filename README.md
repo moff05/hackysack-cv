@@ -1,117 +1,175 @@
 # Hacky Sack CV
 
-Computer vision analyzer for Hacky Sack (footbag) gameplay video. Tracks
-players and their pose, tracks the sack, detects touches and drops, and
-overlays a live stats dashboard on the output video.
+Turn footbag footage into an annotated video with player identities, pose overlays,
+a sack trajectory, estimated touches and drops, a timestamped JSON report, and an
+interactive session review page.
+Everything processes locally. No hosted service or API key is required.
 
 ## Setup
 
+Use Python 3.11–3.13:
+
 ```bash
-cd claudeprojects/hackysack-cv
+git clone https://github.com/moff05/hackysack-cv.git
+cd hackysack-cv
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-The pose model (`yolov8n-pose.pt`) auto-downloads from Ultralytics on first
-run — no setup needed there.
+The default player tracker uses YOLOv8 pose and BoT-SORT with appearance
+re-identification. Ultralytics downloads the pose and ReID models on first use,
+which requires internet access. Keep downloaded weights for subsequent offline runs.
+Custom sack weights and private training footage are **not included in Git**.
 
-## Quick start (no custom sack model required)
-
-Generate a synthetic test clip and run the pipeline end-to-end:
+## Try it without downloading models
 
 ```bash
-python tests/generate_test_video.py --output test_videos/synthetic_bounce.mp4
-python run.py test_videos/synthetic_bounce.mp4 --mock-sack --display
+python tests/generate_test_video.py --output test_videos/demo.mp4
+python run.py test_videos/demo.mp4 --mock-sack --skip-players --output output/demo.mp4
 ```
 
-`--mock-sack` swaps in a synthetic bouncing trajectory so you can see the
-Kalman smoothing, HUD, and game logic working before you've trained or tuned
-a real sack detector. Drop it once you're pointing at real footage.
+This demo needs only NumPy and OpenCV. `--mock-sack` generates positions; it does
+not measure detection accuracy. `--skip-players` disables pose inference and touch
+attribution. The output visibly labels synthetic runs, and the report records them.
 
-On real footage with people, drop `--mock-sack`. Detection falls back
-automatically:
-
-1. `models/sack_detector.pt` if it exists (a model you've trained — see below)
-2. HSV color-threshold blob detection otherwise (tune the color range in
-   `sack_tracker.py`'s `ColorThresholdSackDetector` defaults to match your
-   actual sack's color — defaults assume a bright orange/yellow footbag)
-
-## Usage
+To exercise actual color detection on the synthetic green/black ball:
 
 ```bash
-python run.py <video_path> [options]
-
-  --output PATH             annotated video output (default output/annotated.mp4)
-  --sack-model PATH         custom-trained sack detector weights
-  --pose-model PATH         Ultralytics pose model (default yolov8n-pose.pt)
-  --mock-sack               use synthetic trajectory instead of real detection
-  --reference-height-m N    assumed average player height, for pixel->meter scale
-  --touch-radius-px N       proximity threshold for counting a touch
-  --display                 show a live preview window while processing
+python run.py test_videos/demo.mp4 --color-sack --skip-players --output output/color-demo.mp4
 ```
 
-## How it works
+## Analyze gameplay
 
-| Module | Responsibility |
+```bash
+python run.py footage.mp4 --output output/session.mp4
+```
+
+If `models/sack_detector.pt` exists, it is selected automatically. Otherwise the
+app announces a color detector tuned for a **green/black footbag on neutral ground**.
+Other footbag colors need tuned HSV thresholds or trained weights. Foliage and
+grass can confuse the color detector.
+
+For a quick check before analyzing an entire recording:
+
+```bash
+python run.py footage.mp4 --max-frames 300 --output output/preview.mp4
+```
+
+Use `--display` for a live preview; press **Q** to finish and save the processed
+portion. Ctrl+C cancels and removes the incomplete video, preserving prior output.
+Video outputs are written to a temporary file and replace the requested path only
+after processing succeeds. Successful runs overwrite an existing output at that path.
+Source and output paths must differ. The output is silent MP4; original audio is
+not copied.
+
+### Options
+
+| Option | Purpose |
 |---|---|
-| `config.py` | All tunable thresholds in one `AppConfig` dataclass |
-| `types.py` | Shared dataclasses (`PlayerState`, `SackState`, `GameStats`, ...) and COCO-17 keypoint layout |
-| `player_tracker.py` | YOLO pose + ByteTrack (`model.track(..., persist=True)`), extracts ankle/knee/chest keypoints per persistent `player_id` |
-| `sack_tracker.py` | Sack detection (trained model / color threshold / mock) + Kalman filter smoothing and occlusion coasting |
-| `kalman.py` | Constant-velocity 2D Kalman filter (state: x, y, vx, vy) |
-| `kinematics.py` | Pixel->meter scale from assumed player height; sack speed and apex height |
-| `game_logic.py` | Touch detection (proximity + velocity inflection) and ground-contact drop detection, with per-player stats |
-| `hud.py` | OpenCV overlay: player boxes/skeletons, sack trail, dashboard, leaderboard |
-| `pipeline.py` | `HackySackAnalyzer` — wires everything into a single video read/annotate/write loop |
-| `run.py` | CLI entrypoint |
+| `--output PATH` | Annotated `.mp4`; default `output/annotated.mp4` |
+| `--report PATH` | JSON report; defaults beside output, with `.json` extension |
+| `--sack-model PATH` | Explicit trained weights; missing paths are errors |
+| `--color-sack` | Force green/black color detection |
+| `--mock-sack` | Synthetic motion for pipeline testing |
+| `--skip-players` | Skip pose inference; no player touch attribution |
+| `--pose-model PATH` | Alternate Ultralytics pose weights |
+| `--sack-confidence N` | Trained sack confidence, default `0.25` |
+| `--ground-line-ratio N` | Ground height divided by image height; default `0.92` |
+| `--touch-radius-px N` | Player proximity threshold; default `60` |
+| `--reference-height-m N` | Assumed player height; default `1.75` |
+| `--max-frames N` | Process the first N frames |
+| `--display` | Preview window (requires a graphical desktop) |
+| `--quiet` | Hide frame progress |
 
-## Detection logic
+Model and tracker defaults resolve relative to this repository, so `run.py` can be
+invoked from another working directory. Input/output paths remain relative to your
+current directory. Detector-selection options are mutually exclusive.
 
-- **Touch**: sack is within `touch_radius_px` of a tracked ankle/knee/chest
-  keypoint AND vertical velocity flips from downward to upward beyond a noise
-  threshold (`inflection_min_delta_vy`).
-- **Drop**: sack's y-position crosses the ground plane
-  (`ground_line_ratio * frame_height`) without that upward deflection. Resets
-  `current_round_touches` and charges an error to whichever player was
-  nearest.
-- An `event_cooldown_frames` window prevents one physical contact from being
-  double-counted across a few noisy frames.
+## Read the results
 
-## Known approximations
+Open the generated `.html` file beside the JSON report to review the video, tracking
+coverage, player totals, and event log. Click an event timestamp to replay that moment.
+The review page works locally without a server or internet connection. Keep its video
+and JSON files in their original relative locations when moving or sharing the page.
 
-- **Ground plane** is a flat horizontal line at a configurable fraction of
-  frame height, not a real calibrated floor plane. Fine for a fixed, roughly
-  level camera; wrong for extreme angles.
-- **Pixel-to-meter scale** comes from assuming everyone in frame is
-  `reference_height_m` tall on average (default 1.75m) and measuring their
-  bounding-box pixel height. It's a rough estimate, good enough for relative
-  speed/height numbers on the HUD, not lab-grade kinematics.
-- **Chest keypoint** is synthesized as the shoulder midpoint — COCO pose
-  doesn't have a native torso/chest point.
+If `ffmpeg` is available on your system PATH, the CLI encodes H.264 video for browser
+playback. Otherwise it writes MPEG-4 Part 2, which desktop players such as VLC can
+open; browser support varies and the review page explains the fallback. On macOS,
+install FFmpeg with `brew install ffmpeg`; on Ubuntu use `sudo apt install ffmpeg`.
 
-## Training a real sack detector
 
-Once you've got footage:
+The HUD shows current-round touches, session touches, best round, total drops,
+rough speed/height, and a ranked player table. A bottom status bar distinguishes
+**detected**, **predicted through occlusion**, and **missing** sack states.
 
-1. Label sack bounding boxes across a few hundred frames (Roboflow or
-   CVAT both work well for this).
-2. Train with Ultralytics directly, e.g.:
+Each JSON report includes:
+
+- Video dimensions, FPS, processed duration, and whether the run was shortened.
+- The detector, synthetic mode, and complete configuration used.
+- Observed, predicted, and missing frame counts. Observation coverage measures
+  how often the tracker accepted a detection; it is **not a precision/accuracy score**.
+- Session and per-player statistics, including unattributed drops.
+- Touch/drop events with frame index, timestamp, player ID (or null), and position.
+
+## Scoring and limitations
+
+A touch requires consecutive observed frames showing a downward-to-upward velocity
+change near a tracked ankle, knee, or shoulder-midpoint chest estimate. Predicted
+positions never create scoring events; gaps clear velocity comparisons. This is
+conservative: touches hidden behind feet, stalls, and some sideways kicks can be missed.
+
+A drop is an observed sack at or below the configured ground line without an upward
+inflection. A ground latch prevents repeated errors while the sack rests there; it
+re-arms after the sack rises at least 20 pixels above the line. Only a nearby player
+is charged, otherwise the drop is unattributed. A cooldown separates scoring events.
+
+**These are heuristic estimates, not verified scoring.** Set the ground line to the
+actual playing surface for each camera view. One horizontal plane is a poor fit for
+perspective-heavy scenes, sloped ground, or a moving camera. Player identities can
+still change during long occlusions. Speed and height use bounding-box size and an
+assumed player height, not calibrated geometry. Training on more varied labeled
+footage and comparing against manually scored held-out clips is necessary before
+claiming accuracy across venues or players.
+
+## Train a sack detector
+
+1. Label footbag boxes in representative frames, including motion blur, occlusion,
+   and ground contact; include negative background frames.
+2. Split by source video/session so near-identical frames do not leak into validation.
+3. Train using an Ultralytics dataset YAML:
    ```bash
-   yolo detect train data=sack.yaml model=yolov8n.pt epochs=100 imgsz=640
+   yolo detect train data=sack.yaml model=yolov8n.pt epochs=100 imgsz=1280
    ```
-3. Drop the resulting `best.pt` at `models/sack_detector.pt` — `run.py`
-   picks it up automatically over the color-threshold fallback.
+4. Copy the selected `best.pt` to `models/sack_detector.pt` or pass `--sack-model`.
+5. Review held-out detections and timestamped scoring events; tune confidence and
+   geometry to your footage. The runtime sack inference resolution is 1280.
 
-## Project layout
+Historical data-mining utilities live in [scripts/data_mining](scripts/data_mining/README.md).
+They capture experiments on local footage, not a general-purpose training service.
 
+## Development and verification
+
+```bash
+python -m unittest discover -s tests -v
 ```
-hackysack-cv/
-├── run.py                        # CLI entrypoint
-├── requirements.txt
-├── src/hackysack_cv/              # package (see table above)
-├── tests/generate_test_video.py   # synthetic bounce clip generator
-├── test_videos/                   # drop real/synthetic clips here
-├── models/                        # sack_detector.pt goes here
-└── output/                        # annotated videos land here
-```
+
+The offline suite tests the tracking lifecycle, jump rejection, scoring, real MP4
+round-tripping, reports, frame limits, and failure cleanup without loading any model.
+GitHub Actions runs it on Python 3.11, 3.12, and 3.13 and exercises the demo CLI.
+Real-model quality still needs footage-based evaluation; passing these tests does
+not establish detector accuracy.
+
+| File | Responsibility |
+|---|---|
+| `run.py` | CLI, progress, input options, useful failure messages |
+| `config.py` | Validated tracking, scoring, and display configuration |
+| `player_tracker.py` | YOLO pose + BoT-SORT/ReID player identities |
+| `sack_tracker.py` | YOLO/color/mock detectors, ROI, jump gating, occlusion handling |
+| `kalman.py` | Constant-velocity 2D filter |
+| `game_logic.py` | Conservative touch/drop events and round lifecycle |
+| `kinematics.py` | Approximate pixel-to-meter conversions |
+| `hud.py` | Video overlay and tracking status |
+| `pipeline.py` | Video I/O, analysis, cleanup, session export |
+| `report.py` | Standalone HTML session review and event navigation |
+| `tests/` | Regression suite and synthetic fixture generator |

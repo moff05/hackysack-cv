@@ -125,15 +125,19 @@ class DropEvent:
 class GameStats:
     current_round_touches: int = 0
     total_touches: int = 0
+    total_drops: int = 0
+    best_round_touches: int = 0
     player_touch_counts: Dict[int, int] = field(default_factory=dict)
     player_errors: Dict[int, int] = field(default_factory=dict)
 
     def record_touch(self, player_id: int) -> None:
         self.current_round_touches += 1
         self.total_touches += 1
+        self.best_round_touches = max(self.best_round_touches, self.current_round_touches)
         self.player_touch_counts[player_id] = self.player_touch_counts.get(player_id, 0) + 1
 
     def record_drop(self, player_id: Optional[int]) -> None:
+        self.total_drops += 1
         self.current_round_touches = 0
         if player_id is not None:
             self.player_errors[player_id] = self.player_errors.get(player_id, 0) + 1

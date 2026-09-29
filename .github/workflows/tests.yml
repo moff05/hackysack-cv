@@ -1,0 +1,20 @@
+name: Tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  offline-regressions:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install 'numpy>=1.26,<3' 'opencv-python-headless>=4.9,<6'
+      - run: python -m unittest discover -s tests -v
+      - run: python tests/generate_test_video.py --output output/demo-input.mp4 --duration-s 1
+      - run: python run.py output/demo-input.mp4 --output output/demo.mp4 --mock-sack --skip-players --quiet
