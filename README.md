@@ -1,5 +1,7 @@
 # Hacky Sack CV
 
+**Build log with progress over time: https://hackysack-cv.vercel.app**
+
 Turn footbag footage into an annotated video with player identities, pose overlays,
 a sack trajectory, estimated touches and drops, a timestamped JSON report, and an
 interactive session review page.

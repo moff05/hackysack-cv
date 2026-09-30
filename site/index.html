@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hacky Sack CV Build Log</title>
+<meta name="description" content="Teaching a computer to track a footbag that is 20 pixels wide: what worked, what failed, and what the numbers actually say.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%2312a37a'/><path d='M16 3v26M3 16h26' stroke='%23101' stroke-width='2'/></svg>">
+<style>
+:root{--bg:#f6f7f4;--card:#fff;--text:#16201c;--muted:#5d6b64;--rule:#dde2dc;--accent:#0f8f6a;--warn:#b4541a;--code:#eaefe9}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1512;--card:#161e1a;--text:#e8eee9;--muted:#93a39a;--rule:#27322d;--accent:#3fd0a0;--warn:#f0934f;--code:#1d2722}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:17px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+.wrap{max-width:760px;margin:0 auto;padding:0 16px}
+header{padding:56px 0 24px}
+.eyebrow{color:var(--accent);font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;font-weight:600}
+h1{font-size:2.3rem;line-height:1.15;margin:.3rem 0 .6rem}
+.lede{color:var(--muted);font-size:1.1rem;margin:0 0 1rem}
+.links a,.btn{display:inline-block;margin-right:.6rem;padding:.4rem .8rem;border:1px solid var(--rule);border-radius:8px;background:var(--card);color:var(--text);text-decoration:none;font-size:.9rem}
+.links a:hover{border-color:var(--accent)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:28px 0}
+.stat{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:14px}
+.stat b{display:block;font-size:1.7rem;color:var(--accent);line-height:1.1}
+.stat span{font-size:.82rem;color:var(--muted)}
+h2{font-size:1.4rem;margin:2.6rem 0 .4rem}
+p{margin:.6rem 0}
+a{color:var(--accent)}
+code{background:var(--code);padding:.1em .35em;border-radius:4px;font-size:.88em}
+.tl{position:relative;margin:1.4rem 0 0;padding-left:26px;border-left:2px solid var(--rule)}
+.entry{position:relative;margin:0 0 2.2rem}
+.entry::before{content:"";position:absolute;left:-34px;top:.45rem;width:14px;height:14px;border-radius:50%;background:var(--accent);border:3px solid var(--bg)}
+.entry.fail::before{background:var(--warn)}
+.date{font-size:.8rem;color:var(--muted);letter-spacing:.04em}
+.entry h3{margin:.1rem 0 .3rem;font-size:1.15rem}
+.tag{display:inline-block;font-size:.7rem;padding:.05rem .45rem;border-radius:99px;border:1px solid currentColor;margin-left:.4rem;vertical-align:middle;color:var(--accent)}
+.fail .tag{color:var(--warn)}
+.crops{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:.8rem 0 .3rem}
+.crops img{width:100%;height:auto;border-radius:6px;display:block}
+figcaption,.cap{font-size:.82rem;color:var(--muted)}
+figure{margin:1rem 0}
+figure img{width:100%;height:auto;border-radius:8px;display:block}
+table{width:100%;border-collapse:collapse;font-size:.9rem;margin:1rem 0;background:var(--card);border:1px solid var(--rule);border-radius:8px;overflow:hidden}
+th,td{text-align:left;padding:.5rem .7rem;border-bottom:1px solid var(--rule)}
+th{color:var(--muted);font-weight:600;font-size:.8rem}
+tr:last-child td{border-bottom:0}
+.note{border-left:3px solid var(--warn);background:var(--card);padding:.7rem 1rem;border-radius:0 8px 8px 0;margin:1.2rem 0}
+footer{padding:2rem 0 4rem;color:var(--muted);font-size:.85rem}
+@media (max-width:520px){h1{font-size:1.8rem}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="eyebrow">Computer vision build log</div>
+  <h1>Tracking a Hacky Sack That's 20 Pixels Wide</h1>
+  <p class="lede">A local pipeline that watches footbag video, follows the players and the sack, and tries to count touches and drops. This page is the honest version of how it got built: what failed, what worked, and what the numbers say.</p>
+  <div class="links"><a href="https://github.com/moff05/hackysack-cv">Source on GitHub ↗</a><a href="https://github.com/moff05/hackysack-cv/blob/main/docs/VALIDATION.md">Validation record ↗</a></div>
+  <div class="stats">
+    <div class="stat"><b>8 → ~163</b><span>labeled sack examples, round 1 to round 4</span></div>
+    <div class="stat"><b>0.919</b><span>mAP50 on the round 4 validation set</span></div>
+    <div class="stat"><b>30 → 19</b><span>max player ID for 3 real people</span></div>
+    <div class="stat"><b>30%</b><span>of frames with a confirmed sack, 60 s clip</span></div>
+  </div>
+</header>
+
+<h2>The setup</h2>
+<p>Three friends kicking a footbag on a driveway in Miami. The camera sits low on the ground, the footage is 1920x1440, and the sack is seafoam green and black and only 15 to 25 pixels across. The background is about the worst case for small-object detection: palm fronds, iron fence spikes, and sky.</p>
+<p>The pipeline uses YOLO pose for the players, a tracker to keep their IDs, a Kalman filter for the sack, and a rule that looks for a downward-to-upward velocity change near a foot or knee to call a touch. Everything runs locally and the output is an annotated video plus a JSON report.</p>
+
+<figure>
+  <img src="img/pipeline.jpg" alt="Annotated frame from the pipeline showing three players with pose skeletons, ID labels, a score HUD and the sack's yellow trail near the bottom right" loading="lazy">
+  <figcaption>What the pipeline renders: pose skeletons, player IDs, the score panel, a status bar, and the sack's trail (bottom right). Faces blurred.</figcaption>
+</figure>
+
+<h2>Progress over time</h2>
+<div class="tl">
+
+<div class="entry">
+  <div class="date">AUG 23</div>
+  <h3>First version, on synthetic video <span class="tag">built</span></h3>
+  <p>Pose tracking, a Kalman-filtered sack tracker, touch and drop logic, and a HUD burned into the output. It only ever ran on generated test clips with a perfectly colored ball.</p>
+</div>
+
+<div class="entry fail">
+  <div class="date">SEP 14</div>
+  <h3>Real footage, and color detection hits a wall <span class="tag">failed</span></h3>
+  <p>The first real 20 minute recording arrived. I tuned HSV thresholds to the actual sack, added a region around the players and jump gating on the Kalman filter. It still locked onto backlit palm fronds and fence spikes. At this resolution a dark gap between green blades looks almost the same as the sack's green-to-black edge. That's a ceiling for color and shape heuristics on this background, not a tuning problem, so I trained a detector instead.</p>
+</div>
+
+<div class="entry">
+  <div class="date">SEP 14 · ROUND 1</div>
+  <h3>8 examples and a fine-tuned YOLO <span class="tag">trained</span></h3>
+  <p>Finding the ball at all was the hard part. I used heuristics only to suggest candidates, then checked every one by eye. That gave 8 confirmed sacks and about 85 hard negatives such as fence spikes, shadows, and shoe soles. The fine-tuned model found 3 of 4 known sightings with no false positives, but recall was thin.</p>
+  <p>Two bugs only showed up against real footage, not in the training metrics. The detector wasn't passing <code>imgsz</code>, so it silently ran at 640 and shrank an already tiny object. And the acceptance threshold was shared with the color detector, so it rejected correct detections that scored around 0.11.</p>
+  <div class="crops"><img src="img/r1_1.jpg" alt="Sack in open sky, yellow box" loading="lazy"><img src="img/r1_2.jpg" alt="Sack in open sky, yellow box" loading="lazy"><img src="img/r1_3.jpg" alt="Sack in open sky, yellow box" loading="lazy"></div>
+  <div class="cap">Round 1 labels. All airborne, all against sky.</div>
+</div>
+
+<div class="entry">
+  <div class="date">SEP 15 · ROUND 2</div>
+  <h3>Bootstrapping to 180 examples <span class="tag">trained</span></h3>
+  <p>I ran round 1's model across the full 20 minutes at very low confidence as a candidate finder. I then reviewed all 172 clusters one by one, and every one was a real sack. Retraining on 180 positives lifted the same detection that scored 0.11 to about 0.70. On real footage that meant 4 of 4 known sightings, no false positives in a broad sweep, and the pipeline's first real touch and drop events.</p>
+  <div class="crops"><img src="img/r2_1.jpg" alt="Sack in sky, yellow box" loading="lazy"><img src="img/r2_2.jpg" alt="Sack in sky, yellow box" loading="lazy"><img src="img/r2_3.jpg" alt="Sack in sky, yellow box" loading="lazy"></div>
+  <div class="cap">Round 2 labels, mined by the model itself and verified by hand.</div>
+</div>
+
+<div class="entry fail">
+  <div class="date">SEP 15 · ROUND 3</div>
+  <h3>Ground-level sacks: too few to learn <span class="tag">partial</span></h3>
+  <p>Every example so far was airborne, so a sack at someone's feet was invisible to the model. Bootstrapping can't fix that because it only finds what the model already believes. I found about 300 kick events by tracking ankle lift and pulled frames just before each peak. Only 5 of 103 candidates were real. Retraining with 5 ground examples still missed a held-out ground-level test.</p>
+  <div class="note"><b>A mistake worth keeping.</b> A spot check of the output video showed a confident detection on empty pavement, so I called round 3 a wash. It wasn't. The raw frame showed a real ball at those exact pixels, and the tracker's own drawn dot was covering it. When checking a small object for a false positive, look at the raw source frame, never the annotated one.</div>
+  <div class="crops"><img src="img/r3_1.jpg" alt="Sack on pavement next to shoes, yellow box" loading="lazy"><img src="img/r3_2.jpg" alt="Sack next to a shoe, yellow box" loading="lazy"><img src="img/r3_3.jpg" alt="Sack on pavement, yellow box" loading="lazy"></div>
+  <div class="cap">Round 3's five ground-level labels.</div>
+</div>
+
+<div class="entry">
+  <div class="date">SEP 15 · ROUND 4</div>
+  <h3>Ground level at real volume <span class="tag">worked</span></h3>
+  <p>I mined the roughly 206 kick events round 3 skipped and found 11 more real sightings, again about a 5% hit rate. That brought ground-level examples to 16 out of about 163. Validation metrics: precision 0.928, recall 0.909, mAP50 0.919. More importantly, a held-out ground-level frame the model never trained on went from no detection to about 0.28 confidence. That's generalization, not memorization.</p>
+  <p>Hand-estimating a box from a thumbnail turned out to be unreliable. Nearly every one of my first 11 boxes landed on a fence, car, or empty pavement until I checked a zoomed native-resolution crop.</p>
+  <div class="crops"><img src="img/r4_1.jpg" alt="Sack on pavement with a hand reaching in, yellow box" loading="lazy"><img src="img/r4_2.jpg" alt="Sack on pavement near a shoe, yellow box" loading="lazy"><img src="img/r4_3.jpg" alt="Sack on pavement, yellow box" loading="lazy"></div>
+  <div class="cap">Round 4 ground-level labels. Different sizes, surfaces, and distances from the camera.</div>
+</div>
+
+<div class="entry">
+  <div class="date">SEP 15 · IN PARALLEL</div>
+  <h3>Player IDs kept climbing <span class="tag">improved</span></h3>
+  <p>Three people were getting IDs like P10, P18, P30. Switching to BoT-SORT with appearance re-identification and a longer occlusion buffer helped, but a trained ReID model changed nothing, which ruled out weak appearance matching. The real cause: the pose model had the same missing <code>imgsz</code> bug, so a player standing far away behind fence bars went undetected for 9 to 16 seconds at a time. No tracker can re-identify someone the detector never saw.</p>
+  <p>Fixing that made it worse at first (max ID 21 to 33) because the higher resolution produced duplicate boxes on the same player. Tighter NMS brought it down. Net result: max ID 30 to 19. Better, not solved.</p>
+</div>
+
+<div class="entry">
+  <div class="date">SEP 29</div>
+  <h3>Hardening, reports, and an honest validation <span class="tag">shipped</span></h3>
+  <p>The CLI now writes a JSON report and a local HTML review page, encodes browser-playable video, and cleans up after failed runs. 19 offline regression tests run in CI. Predicted positions from the Kalman filter can no longer create scoring events.</p>
+</div>
+
+</div>
+
+<h2>Where it actually stands</h2>
+<p>This is the part a demo video would hide. On real footage the system runs end to end, but it isn't accurate enough to keep score.</p>
+<table>
+  <tr><th>Clip</th><th>Frames</th><th>Sack seen</th><th>Predicted</th><th>Missing</th></tr>
+  <tr><td>60 s recording</td><td>1,799</td><td>545 (30%)</td><td>617</td><td>637</td></tr>
+  <tr><td>First 10 s of kicking</td><td>300</td><td>42 (14%)</td><td>89</td><td>169</td></tr>
+</table>
+<div class="note">Both runs reported zero touches and zero drops. That does <b>not</b> mean there were none. There's no hand-scored reference yet, so the event detector is untested against the truth. Coverage is how often the tracker accepted a detection, not an accuracy score.</div>
+
+<h2>What's next</h2>
+<ul>
+  <li>Hand-score a held-out clip (sack positions, who touched it, touch and drop timestamps) and measure precision and recall against it.</li>
+  <li>Split train and validation by session. Adjacent frames are nearly identical, so the current validation numbers are likely optimistic.</li>
+  <li>More ground-level data. A second timing offset per kick event, such as 4 frames before the peak instead of 8, is the next source.</li>
+  <li>Replace the single horizontal ground line with perspective-aware calibration.</li>
+</ul>
+
+<footer>
+  Built by Nicholas Moffett. Footage is private and only cropped sack close-ups and one face-blurred frame appear here. Code and docs: <a href="https://github.com/moff05/hackysack-cv">github.com/moff05/hackysack-cv</a>.
+</footer>
+</div>
+</body>
+</html>
