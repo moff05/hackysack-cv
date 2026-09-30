@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Find the Footbag</title>
+<title>Footbag Vision</title>
 <meta name="description" content="A footbag is 20 pixels wide. Teaching a computer to find it took four tries.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%2312a37a'/><path d='M16 3v26M3 16h26' stroke='%23101' stroke-width='2'/></svg>">
 <style>
@@ -22,18 +22,25 @@ h2{font-size:clamp(1.8rem,5vw,2.8rem);line-height:1.05;margin:.3rem 0 1.2rem;let
 .pill{display:inline-block;padding:.45rem .9rem;border:1px solid var(--rule);border-radius:99px;color:var(--text);text-decoration:none;font-size:.9rem;background:var(--card)}
 .pill:hover{border-color:var(--g)}
 .hero{padding:56px 0 48px}
-/* finder */
-.finder{position:relative;border-radius:14px;overflow:hidden;border:1px solid var(--rule);cursor:crosshair;user-select:none;touch-action:manipulation}
-.finder img{display:block;width:100%;height:auto}
-.box{position:absolute;border:3px solid var(--y);border-radius:6px;box-shadow:0 0 0 2000px rgba(0,0,0,.45);opacity:0;transition:opacity .3s;pointer-events:none}
-.miss{position:absolute;width:18px;height:18px;margin:-9px;border:2px solid var(--r);border-radius:50%;pointer-events:none;animation:pop .4s}
-@keyframes pop{from{transform:scale(2);opacity:0}}
-.finder.done .box{opacity:1}
-.fbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:.8rem 0 0;flex-wrap:wrap}
-.msg{font-weight:600;min-height:1.6em}
-.tabs{display:flex;gap:6px}
-.tab{background:var(--card);color:var(--text);border:1px solid var(--rule);border-radius:99px;padding:.4rem .9rem;font:inherit;font-size:.9rem;cursor:pointer}
-.tab[aria-pressed=true],.tab.on{background:var(--g);color:#04130c;border-color:var(--g);font-weight:700}
+/* dial */
+.dial{background:var(--card);border:1px solid var(--rule);border-radius:16px;padding:18px}
+.dialtop{display:flex;justify-content:space-between;align-items:baseline;color:var(--muted);font-size:.9rem}
+.dialtop b{color:var(--y);font-size:1.8rem;letter-spacing:-.02em}
+input[type=range]{width:100%;margin:.6rem 0 1rem;accent-color:var(--y);height:28px}
+.score{display:flex;gap:28px;margin-bottom:14px}
+.score b{font-size:2.6rem;line-height:1;letter-spacing:-.03em;display:block}
+.score span{color:var(--muted);font-size:.85rem}
+#fa{color:var(--r)}
+.grid{display:grid;grid-template-columns:repeat(11,1fr);gap:4px}
+.grid .t{position:relative;aspect-ratio:1;border-radius:6px;overflow:hidden;outline:2px solid var(--g);transition:opacity .25s,outline-color .25s,filter .25s}
+.grid .t img{width:100%;height:100%;display:block;object-fit:cover}
+.grid .t.off{opacity:.25;outline-color:var(--r);filter:grayscale(1)}
+.grid .t.off::after{content:"MISS";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:800 .55rem/1 system-ui;color:#fff;background:rgba(255,107,74,.55)}
+.galbl{margin:16px 0 6px;font-size:.8rem;color:var(--muted)}
+.fagrid .t{outline-color:var(--r);opacity:.12;filter:grayscale(1)}
+.fagrid .t.on{opacity:1;filter:none}
+.note{margin-top:12px;color:var(--muted);font-size:.8rem}
+@media(max-width:560px){.grid{grid-template-columns:repeat(6,1fr)}}
 /* stats */
 .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 .stat{background:var(--card);border:1px solid var(--rule);border-radius:14px;padding:22px 16px;text-align:center}
@@ -84,14 +91,18 @@ footer{padding:48px 0 70px;border-top:1px solid var(--rule);color:var(--muted);f
 <div class="wrap">
 <div class="hero">
   <div class="kick">Computer vision build log</div>
-  <h1>Find the <span class="hl">footbag.</span></h1>
-  <p class="sub">It's 20 pixels wide. Tap where you think it is. Then see how long it took a computer to do the same.</p>
+  <h1>Teaching a computer to see a <span class="hl">20px footbag.</span></h1>
+  <p class="sub">Easy for you. Hard for a model. Drag the dial and watch it trade misses for false alarms.</p>
 
-  <div class="tabs" id="ftabs" style="margin-bottom:10px">
-    <button class="tab on" data-i="0">Sky</button><button class="tab" data-i="1">Ground</button>
+  <div class="dial">
+    <div class="dialtop"><span>Confidence threshold</span><b id="tv">0.25</b></div>
+    <input type="range" id="th" min="0.03" max="0.80" step="0.01" value="0.25" aria-label="Confidence threshold">
+    <div class="score"><div><b id="found" class="good">32</b><span>of 33 footbags found</span></div><div><b id="fa">0</b><span>false alarms</span></div></div>
+    <div class="grid" id="pgrid"></div>
+    <div class="galbl">False alarms (the model saw a footbag in frames with none)</div>
+    <div class="grid fagrid" id="dgrid"></div>
+    <div class="note" id="dnote">Held-out frames the model never trained on. 0.25 is the threshold the pipeline actually uses.</div>
   </div>
-  <div class="finder" id="finder"><img id="fimg" src="img/find_sky.jpg" alt="Photo of a driveway footbag game with one tiny footbag somewhere in frame"><div class="box" id="fbox"></div></div>
-  <div class="fbar"><div class="msg" id="fmsg">Tap the footbag.</div><button class="tab" id="freveal">Show me</button></div>
 
   <div class="top">
     <a class="pill" href="https://github.com/moff05/hackysack-cv">Code ↗</a>
@@ -175,23 +186,18 @@ footer{padding:48px 0 70px;border-top:1px solid var(--rule);color:var(--muted);f
 
 <script>
 (function(){
-  var F=[{src:'img/find_sky.jpg',x:72.1,y:60,w:2.4,h:4.2,alt:'Sky'},{src:'img/find_ground.jpg',x:24.1,y:55.4,w:3.6,h:6.2}];
-  var cur=0,fin=document.getElementById('finder'),img=document.getElementById('fimg'),box=document.getElementById('fbox'),msg=document.getElementById('fmsg'),tries=0;
-  function setBox(){var f=F[cur];box.style.left=(f.x-f.w/2)+'%';box.style.top=(f.y-f.h/2)+'%';box.style.width=f.w+'%';box.style.height=f.h+'%'}
-  function load(i){cur=i;tries=0;fin.classList.remove('done');fin.querySelectorAll('.miss').forEach(function(m){m.remove()});img.src=F[i].src;msg.textContent='Tap the footbag.';msg.className='msg';setBox();
-    document.querySelectorAll('#ftabs .tab').forEach(function(t,j){t.classList.toggle('on',j===i)})}
-  function reveal(){fin.classList.add('done')}
-  fin.addEventListener('click',function(e){
-    if(fin.classList.contains('done'))return;
-    var r=fin.getBoundingClientRect(),px=(e.clientX-r.left)/r.width*100,py=(e.clientY-r.top)/r.height*100,f=F[cur];
-    var dx=(px-f.x)/100*r.width,dy=(py-f.y)/100*r.height,d=Math.sqrt(dx*dx+dy*dy);
-    var hit=d<Math.max(28,r.width*0.04);tries++;
-    if(hit){reveal();msg.innerHTML='Found it in '+tries+(tries===1?' try. ':' tries. ')+'The AI needed four rounds of training.';msg.className='msg good'}
-    else{var m=document.createElement('div');m.className='miss';m.style.left=px+'%';m.style.top=py+'%';fin.appendChild(m);msg.textContent='Nope. Try '+(tries+1)+'.';msg.className='msg bad'}
-  });
-  document.getElementById('freveal').onclick=function(){reveal();msg.textContent='There it is.';msg.className='msg'};
-  document.querySelectorAll('#ftabs .tab').forEach(function(t,i){t.onclick=function(){load(i)}});
-  setBox();
+  var P=[0.73,0.72,0.72,0.71,0.7,0.7,0.68,0.68,0.67,0.66,0.64,0.64,0.63,0.61,0.61,0.6,0.59,0.58,0.58,0.58,0.57,0.57,0.55,0.54,0.53,0.52,0.52,0.52,0.48,0.46,0.45,0.44,0.27];
+  var D=[0.05,0.16,0.04,0.17,0.14,0.24,0.18,0.15,0.15,0.15];
+  var pg=document.getElementById('pgrid'),dg=document.getElementById('dgrid'),th=document.getElementById('th');
+  P.forEach(function(c,i){var d=document.createElement('div');d.className='t';d.innerHTML='<img alt="" loading="lazy" src="img/t/p'+i+'.jpg">';pg.appendChild(d)});
+  D.forEach(function(c,i){var d=document.createElement('div');d.className='t';d.innerHTML='<img alt="" loading="lazy" src="img/t/d'+i+'.jpg">';dg.appendChild(d)});
+  function upd(){var v=+th.value,f=0,a=0;
+    [].forEach.call(pg.children,function(t,i){var on=P[i]>=v;t.classList.toggle('off',!on);if(on)f++});
+    [].forEach.call(dg.children,function(t,i){var on=D[i]>=v;t.classList.toggle('on',on);if(on)a++});
+    document.getElementById('tv').textContent=v.toFixed(2);
+    var fe=document.getElementById('found');fe.textContent=f;fe.className=f>=30?'good':(f>=20?'':'bad');
+    document.getElementById('fa').textContent=a}
+  th.addEventListener('input',upd);upd();
   // rounds
   var rt=document.querySelectorAll('#rtabs .tab'),ps=document.querySelectorAll('.panel');
   rt.forEach(function(t,i){t.onclick=function(){rt.forEach(function(x,j){x.classList.toggle('on',j===i)});ps.forEach(function(p,j){p.classList.toggle('on',j===i)})}});
